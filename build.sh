@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds Moto Racer for the PS5 from the recompiled game (repo/gen-ps5) and your own GOG files.
 #   ./build.sh toolchain once: PS5 payload SDK, RADV and signing tool into the Docker volume (1-2 h)
-#   ./build.sh gen       translate game.EXE to C on the host (needs repo/.venv); writes repo/gen-ps5
+#   ./build.sh gen       translate your game.EXE to C (in the container); writes repo/gen-ps5
 #   ./build.sh sdl       SDL3 for Prospero (official release + ps5/sdl patches)
 #   ./build.sh compile   cross-compile runtime + game code
 #   ./build.sh title     sdl + compile + link + sign into dist/<TITLE_ID>
@@ -14,16 +14,17 @@ STEP=${1:-title}
 GAME=${GAME_DIR:-$HERE/game-extract/app}
 IMAGE=${BUILD_IMAGE:-motoracerps5-build} VOLUME=${BUILD_VOLUME:-motoracerps5-build-data} NAME=motoracerps5
 die() { echo "error: $*" >&2; exit 1; }
-if [ "$STEP" = gen ]; then
-    [ -f "$GAME/game.EXE" ] || die "no $GAME/game.EXE"
-    mkdir -p "$HERE/repo/gen-ps5"
-    "$HERE/repo/.venv/bin/python" -I "$HERE/repo/recompiler/recomp_main.py" "$GAME/game.EXE" "$HERE/repo/gen-ps5" --files 64
-    exit 0
-fi
 docker info > /dev/null 2>&1 || die "Docker is not running."
 docker image inspect "$IMAGE" > /dev/null 2>&1 || docker build -q -t "$IMAGE" "$HERE/docker" > /dev/null
 docker rm -f "$NAME" > /dev/null 2>&1 || true
 mkdir -p "$HERE/dist" "$HERE/art"
+if [ "$STEP" = gen ]; then
+    [ -f "$GAME/game.EXE" ] || die "no $GAME/game.EXE (set GAME_DIR)"
+    rm -rf "$HERE/repo/gen-ps5"; mkdir -p "$HERE/repo/gen-ps5"
+    docker run --rm -v "$(cd "$GAME" && pwd)":/game:ro -v "$HERE":/work "$IMAGE" \
+        python3 -I /work/repo/recompiler/recomp_main.py /game/game.EXE /work/repo/gen-ps5 --files 64
+    exit 0
+fi
 if [ "$STEP" != package ]; then
     docker run -d --name "$NAME" -v "$VOLUME":/build -v "$HERE":/work "$IMAGE" sleep infinity > /dev/null
     trap 'docker rm -f "$NAME" > /dev/null 2>&1 || true' EXIT

@@ -18,39 +18,49 @@ Title ID `PPSA99785`.
 
 Status: tested on a console (menus, races, sound, pad, exit). 4K held 60 fps in a race.
 
-## What you need
+## Quick start
 
-- A PS5 with homebrew enabled, a way to start titles from `/data/homebrew` (for example
-  ShadowMountPlus) and FTP access.
-- A computer with **Docker** (macOS or Linux, 16 GB memory, about 60 GB free for the toolchain) and
-  Python 3 for the host step.
-- The GOG installer `setup_moto_racer_2.1.0.11.exe`, unpacked with [innoextract](https://constexpr.org/innoextract/)
-  (`innoextract --gog setup_moto_racer_2.1.0.11.exe`). The folder with `game.EXE` is the game folder.
+You need three things:
 
-## Build
+1. A PS5 with homebrew enabled, a way to start titles from `/data/homebrew` (for example
+   ShadowMountPlus) and FTP access.
+2. A computer with **Docker** running (macOS or Linux; on Windows use WSL2, untested). About 16 GB of
+   memory and 60 GB of free disk space.
+3. Your own copy of *Moto Racer* from GOG: the offline installer `setup_moto_racer_2.1.0.11.exe`.
+
+Then run one command:
 
 ```bash
-# 0. once: build the PS5 toolchain into a Docker volume (1 to 2 hours)
-./build.sh toolchain
-
-# 1. host step, once: recompile your game.EXE into C (needs repo/.venv with pefile and capstone)
-python3 -m venv repo/.venv && repo/.venv/bin/pip install pefile capstone
-GAME_DIR=/path/to/game/folder ./build.sh gen
-
-# 2. cross-compile, link and sign the title (first run downloads SDL3 and builds it for the console)
-./build.sh title
-
-# 3. copy the game files next to the title
-GAME_DIR=/path/to/game/folder ./build.sh package
+./make.sh /path/to/setup_moto_racer_2.1.0.11.exe
 ```
 
-The result is `dist/PPSA99785/`. Run `./build.sh package` again after every `./build.sh title`
-(the title step wipes the packaged game folder). Add `art/icon.png` and `art/wallpaper.png`
-(your own images) before step 2 for the home-screen art.
+It unpacks the installer, translates your `game.EXE`, builds everything and copies the right game files.
+The first run takes 1 to 2 hours (the PS5 toolchain); later runs take minutes. When it says **Ready**,
+copy `dist/PPSA99785` to your console. You never pick game files by hand.
 
-Options: `BUILD_VOLUME=<name>` (default `motoracerps5-build-data`), `GAME_DIR=<folder with game.EXE>`.
-The step `./build.sh sdl` builds only SDL3; the link step ends with an expected stock-exe link error
-that the script ignores.
+There is no ready-made download of the title: the program file contains your game translated to
+native code, so it has to be built from your own copy.
+
+Optional: put your own `art/icon.png` and `art/wallpaper.png` in place before running, for the home-screen art.
+
+## Building step by step
+
+`make.sh` runs these; use them when working on the port. `GAME_DIR` is the folder with `game.EXE`.
+
+```bash
+./build.sh toolchain                      # once: PS5 toolchain into a Docker volume
+GAME_DIR=/path/to/game ./build.sh gen     # translate game.EXE to C (repo/gen-ps5)
+./build.sh title                          # cross-compile, link and sign
+GAME_DIR=/path/to/game ./build.sh package # copy the game files into dist/PPSA99785/MotoRacer
+```
+
+Run `package` again after every `title` (the title step wipes the packaged game folder).
+Options: `BUILD_VOLUME=<name>` (default `motoracerps5-build-data`), `BUILD_IMAGE=<name>`.
+The link step shows an expected stock-exe link error that the script ignores.
+
+**Game files**, if you copy them yourself: everything in the folder with `game.EXE` (including `game.EXE`
+and the music `.wav` files), except other `.exe` files, `goggame*`, `__support/`,
+`GameuxInstallHelper.dll` and the readme/FAQ text files. They go in `PPSA99785/MotoRacer/`.
 
 ## Install
 

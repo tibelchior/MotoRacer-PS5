@@ -9,6 +9,7 @@ RUN dnf -y install \
         spirv-llvm-translator-devel spirv-tools-devel libclc-devel \
         gcc gcc-c++ meson ninja-build cmake pkgconf-pkg-config ccache bison flex glslang ffmpeg-free bsdtar perl-Digest-SHA xz \
         python3 python3-mako python3-pyyaml python3-packaging python3-pyelftools python3-pip \
+        innoextract python3-pefile python3-capstone \
         zlib-devel libzstd-devel elfutils-libelf-devel expat-devel \
     && dnf clean all
 
