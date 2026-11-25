@@ -1,0 +1,24 @@
+# Your game files, the translated game code, build output and personal art stay out of the repository.
+/game-extract/
+/dist/
+/snap*/
+/host-run*.log
+*.log
+/art/*.png
+/art/*.jpg
+# recompiled game code made from your own game.EXE (translated game code: never share it)
+/repo/gen-ps5/
+/repo/gen/
+# host build trees and the Python environment
+/repo/build/
+/repo/.venv/
+__pycache__/
+*.pyc
+*.o
+# macOS / editor
+.DS_Store
+*.bak
+*.orig
+.claude/
+.vscode/
+.idea/

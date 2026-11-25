@@ -1,0 +1,33 @@
+// macOS folders: ~/Library/Application Support/MotoRacerRecomp, ~/Library/Logs/MotoRacerRecomp.
+#include <cstdlib>
+
+#include "platform.h"
+
+namespace plat {
+
+namespace {
+
+std::string home() {
+    const char *h = getenv("HOME");
+    return h ? h : "";
+}
+
+class MacPaths final : public HostPaths {
+public:
+    std::string data_dir() override { return home().empty() ? "" : home() + "/Library/Application Support/MotoRacerRecomp"; }
+    std::string log_dir() override {
+        if (const char *e = getenv("MOTORACER_LOG_DIR")) return e;   // dev: parallel test runs
+        return home().empty() ? "" : home() + "/Library/Logs/MotoRacerRecomp";
+    }
+};
+
+}  // namespace
+
+HostPaths &os_paths() {
+    static MacPaths paths;
+    return paths;
+}
+
+void register_launchers(const std::string &, const std::string &) {}   // Linux only (launchers_xdg.cpp)
+
+}  // namespace plat

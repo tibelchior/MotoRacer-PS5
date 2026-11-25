@@ -1,0 +1,30 @@
+name: Bug report
+description: Something does not work or looks wrong in the game
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: v0.1.3
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Steam Deck
+        - PSP
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: "What you saw and how to get there. Screenshots, your OS / hardware and, for crashes, the log file (`motoracer.log`, see the troubleshooting guide) help a lot."
+    validations:
+      required: true

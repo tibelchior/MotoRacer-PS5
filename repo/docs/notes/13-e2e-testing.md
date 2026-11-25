@@ -1,0 +1,132 @@
+# 13 — End-to-end (E2E) testing
+
+Unattended game runs that drive the real menus with scripted keys and capture frames. This is the
+standard way to verify anything visible (renderer, menus, resolutions) before asking the owner to
+test. Each run opens a game window for its duration.
+
+## Pieces
+- `MOTORACER_AUTOKEYS` (runtime, `host_window.cpp`): a script of waits and key presses injected as
+  WM_KEY* messages. Tokens: a number waits that many ms; `ENTER ESC UP DOWN LEFT RIGHT SPACE` or a
+  single letter/digit taps a key (held 80 ms); `+KEY` / `-KEY` press / release.
+- `MOTORACER_SNAPSHOT_DIR` (runtime): BMP snapshots — `gpu_*.bmp` every 120 Direct3D frames at full
+  render-target resolution, `frame_*.bmp` every 60 software-renderer frames.
+- `MOTORACER_SNAPSHOT_EVERY=<frames>`: GPU snapshot interval (default 120); e.g. 10 to follow an
+  animation such as the race-start banner.
+- `EXTRA_KEYS="5000 +UP"` (scripts/dev/e2e_race.sh) holds the throttle after the start — needs Options >
+  CONTROLLER = KEYBOARD (UP accelerates).
+- `MOTORACER_DRAW_DISTANCE=<x>` overrides DrawDistance for A/B runs.
+- Race end (podium, results; GitHub issue #12): `MOTORACER_WARP=<k>` (`game/dev_warp.cpp`) carries the
+  player's bike along the track to k sectors before the line every lap, 10 sectors a frame
+  (`MOTORACER_WARP_STEP`): the lap tracking ignores a bike put at the line in one jump. Only while
+  riding (a carried fallen rider fell from the sky for half a minute) and not in replays. Riding means
+  the bike's position changed: during the start countdown the race is frozen (`[0x4dc0b4]`) while a
+  held throttle builds up the speed, and the warp carried the bike off the grid before the start (the
+  countdown then looked stuck for 10+ s; fixed 2026-11-14). With the
+  throttle held a 4-lap championship race on Speed Bay (788 sectors, k = 12) ends in ~40 s.
+  `MOTORACER_LAPS=<n>` sets every single-race track's lap count (track list record `+0x12c`);
+  championships use their own (4). The game writes the track list back at exit and keeps scores:
+  run both on a copy of the game folder (`cp -cR` clones it on APFS without using space;
+  `MOTORACER_GAME_DIR=<copy>`).
+- `MOTORACER_MODES="1024x600,960x720"` (runtime, `ddraw.cpp`): replaces the 16-bit display modes
+  above 640×480 offered to the game — for bisecting resolution bugs.
+- `MOTORACER_D3D_DEBUG=1`: triangle classification / execute-buffer statistics in the log.
+- `scripts/dev/e2e.sh <name> "<keys>" [seconds] [ENV=value ...]`: runs the game with the above, copies
+  the log to `build/e2e/<name>.log`, writes a contact sheet `build/e2e/<name>.png`
+  (`SHEET_GLOB` picks frames, default `gpu_*.bmp`). Sheets need Pillow (system `python3` has it).
+- `scripts/dev/e2e_race.sh <name> <screen-mode-presses> [seconds] [ENV=value ...]`: canned path to a
+  Single Race on Speed Bay, optionally cycling Options › SCREEN MODE first; `TOGGLE_169=1` also
+  toggles 16/9 MODE.
+
+## Menu navigation facts (keyboard)
+- Intro: `ESC`, title: `ESC`, then `ENTER`, `ENTER` (name entry) → main menu. ~4 s before the first key.
+- Menus have no initial selection: the first arrow key selects an item, then `ENTER`. A bare
+  `ENTER` does nothing.
+- Main menu: `LEFT ENTER` = Play Solo; `DOWN DOWN ENTER` = Options.
+- Select mode: `UP UP ENTER` = Single Race (`LEFT` lands on Back).
+- Select mode: Practice, Single Race, Championship. The focus starts on the mode played last
+  (Practice in a fresh install: `RIGHT RIGHT ENTER` = Championship; a folder last used for single
+  races: `UP UP RIGHT ENTER`). Then `UP UP UP ENTER` (Continue on the Speed Bay page) and the bike as
+  below. After the finish: `ESC` (answers the replay question) → podium (3D, at 640×480) → TOP 5
+  page; another `ESC` leaves the championship. e.g. `... ENTER 4000 +UP 80000 -UP 2000 ESC 6000 ESC`
+  with `MOTORACER_WARP=12`: hold the throttle long enough — on the Deck the warp restarts more often
+  (laps took longer than on the Mac), and an `ESC` before the finish opens the pause menu.
+- Select race: `UP UP UP ENTER` = Continue (Speed Bay). Choose bike: `DOWN DOWN ENTER` = Start.
+  RIGHT / LEFT change the track (Speed Bay, Snow Ride, West Way, Dirt Arena with the original best
+  scores) and move the focus to the arrow; plain taps there sometimes move twice. Dirt Arena (dirt
+  bikes): `+LEFT 20 -LEFT 2500 +DOWN 20 -DOWN 1500 ENTER` instead of `UP UP UP ENTER`.
+- Options: rows are DIFFICULTY, CONTROLLER, DETAIL LEVELS, OPPONENTS, D3D, VOICES, SOUNDS, MUSIC,
+  SCREEN MODE, 16/9 MODE, ... — 9 × `DOWN` reaches SCREEN MODE. `ENTER` cycles a value (`LEFT`/
+  `RIGHT` do nothing). From SCREEN MODE, 7 × `DOWN` reaches Accept.
+- SCREEN MODE lists (runtime-owned): 4:3 = 320×240, 512×384, 640×480, 800×600, 1024×768, 1280×960,
+  1600×1200, 1920×1440; 16/9 MODE on = 1920×1080 → 2560×1440 → 3840×2160 → 320×180 → 512×288 →
+  640×360 → 1280×720 (wraps). The 16/9 MODE row is right below SCREEN MODE; `ENTER` toggles it.
+- 300 ms between rows and 1.5 s between screens is enough.
+- SCREEN MODE persists between runs (the game saves its size class, the runtime the exact mode —
+  see 11-d3d-plan.md), so count SCREEN MODE presses from the saved mode. With `MOTORACER_MODES`
+  set to a list without the saved mode, the game starts from 640×480.
+- Options rows: DIFFICULTY, CONTROLLER, DETAIL LEVELS, OPPONENTS, D3D (5 × `DOWN`; `ENTER` cycles
+  ON → FILTERED → OFF), VOICES, SOUNDS, MUSIC, SCREEN MODE, 16/9 MODE, … From D3D, 11 × `DOWN`
+  reaches Accept. Changes made in a run that is then killed may not be saved by the game — check
+  with a read-only run that only opens Options.
+- `scripts/dev/e2e_race.sh` with `DETAIL_PRESSES=<n>` cycles DETAIL LEVELS (3 × `DOWN`, `ENTER`). Set game
+  options through the menu: writing an option global directly (e.g. detail `0x4dc098`) skips what the
+  menu does on a change and broke rendering.
+- Option values changed by a run stay changed — check DIFFICULTY / CONTROLLER / SOUNDS afterwards.
+
+## Example
+```
+SHEET_GLOB="gpu_00[23]*.bmp" scripts/dev/e2e_race.sh race1024 1 50 MOTORACER_D3D_DEBUG=1 MOTORACER_MODES=1024x768
+# -> build/e2e/race1024.png, build/e2e/race1024.log
+```
+
+## Disk use (2026-10-16)
+- GPU snapshots are full render-target BMPs (~20 MB each at 2560×1920). Never deleted, they had grown
+  to 45 GB in `build/e2e` (3,118 frames; e.g. 5.2 GB for one run with `MOTORACER_SNAPSHOT_EVERY=6`).
+- `scripts/dev/e2e.sh` now deletes a run's frames once its contact sheet is made; `KEEP_FRAMES=1` keeps them
+  for closer inspection, and kept frames older than an hour are removed at the start of every run.
+  Sheets (`build/e2e/<name>.png`) and logs (`<name>.log`) stay.
+- Runs are windowed: `e2e.sh` sets `MOTORACER_FULLSCREEN=0` (a dev override; motoracer.ini and normal
+  launches keep their setting). Do not run E2E while the owner plays: both write the same log file.
+
+## On the owner's Steam Deck over SSH (2026-11-13, issue #12)
+- Set-up (owner, Desktop Mode): `sudo systemctl start sshd`, then `ssh-copy-id deck@<ip>` from the Mac in
+  a real terminal (the host-key and password prompts need one; compare the host key with
+  `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the Deck). Off again:
+  `sudo systemctl disable --now sshd`.
+- `scripts/dev/deck.sh push <program> [name]`, `run <name> <tag> "<keys>" [secs] [ENV=v ...]`, `log <tag>`
+  (`DECK_HOST`, default `deck@steamdeck.local`; `DECK_DIR`, default `mr-test/MotoRacer`).
+- A release-layout test folder (`~/mr-test/MotoRacer`: the tarball unpacked, first start with
+  `MOTORACER_SETUP=$HOME/Downloads/setup_moto_racer_2.1.0.11.exe` installs and builds the module on
+  the Deck). Other programs sit next to `motoracer` in the same folder and use its `game/`, `gamecode/`.
+- Runs go to the Desktop session: `DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000
+  XAUTHORITY=/run/user/1000/xauth_*`, with `MOTORACER_AUTOKEYS` as on the Mac (`timeout` exists there).
+  The log is `logs/motoracer.log` in the folder; a crash leaves `FATAL: host fault` and a backtrace.
+- Do not `pkill -f` a pattern from the ssh command line: it matches the remote shell itself.
+- #12 A/B on the Deck, championship race to the podium (`MOTORACER_WARP=12`): v0.1.3 + the warp
+  without the renderer fix crashed at the podium (`FATAL: host fault at 0x70`, in
+  `libvulkan_radeon` under `dx::gpu::present_flip`); with the fix the log shows "texture 256x256
+  released with draws queued: drawn now" at that point and the game goes on.
+- Windows builds under Proton on the Deck (2026-11-13, issue #14): the release zip unpacked in
+  `~/mr-win/MotoRacer`, run with GE-Proton (`proton run motoracer.exe`, `STEAM_COMPAT_DATA_PATH` = a
+  prefix folder, `STEAM_COMPAT_CLIENT_INSTALL_PATH=~/.local/share/Steam`; `PROTON_LOG=1` needs a
+  `SteamGameId`). The first start installs the game, but building the module fails under Wine (zig.exe:
+  "unable to open global cache directory"): build `gamecode.dll` on the Mac instead
+  (`build_gamecode.py --target windows --arch x86_64 --host-lib <the program's libmotoracer.dll.a>`, full
+  zig from `build/tools`) and put it in `gamecode/` with `build_id.txt` = the kit's BUILD_ID.
+  - A test program must be named `motoracer.exe`: the module imports from that DLL name, and a
+    `motoracer-A.exe` made Windows load the real `motoracer.exe` beside it as a second copy (the module
+    then saw its zeroed registers: "host fault at 0x0" on entering the game).
+  - Start long runs with `systemd-run --user --collect --unit=mr-win ...`: everything started from an
+    SSH session is killed when that session closes (`nohup` / `setsid` do not help).
+  - A program cross-built in `build/win-rel` equals the release one (`llvm-strip --strip-debug`: 14
+    bytes differ).
+- Native Linux runs for game-logic changes (2026-11-13, frame-rate work; the owner prefers these to
+  Proton): the program from the Docker sniper build (`build/linux-mod`, incremental `cmake --build`
+  takes seconds), the module cross-built on the Mac (`build_gamecode.py --target linux --arch x86_64
+  --out build/gc-linux`, ~25 s) and pushed to its own folder, used with
+  `MOTORACER_GAME_MODULE=/home/deck/mr-test/MotoRacer/gamecode-fps/gamecode.so` so the other programs in
+  the folder keep the matching module.
+  - With the Deck's screen idle the compositor throttles vsync'd windows to 20 fps: pass
+    `MOTORACER_VSYNC=0` and an explicit `MOTORACER_FRAMERATE` for any timing comparison, and check the
+    frame times in the log.
+  - `MOTORACER_DISPLAY_HZ=144` makes `MOTORACER_FRAMERATE=display` pace 144 fps on the 60 Hz screen.

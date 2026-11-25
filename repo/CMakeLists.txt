@@ -1,0 +1,355 @@
+cmake_minimum_required(VERSION 3.24)
+project(MotoRacerRecomp LANGUAGES C CXX ASM)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo)
+endif()
+
+# The user's own copy of the GOG game.EXE. Recompiled C is generated from it at build time
+# and never committed.
+set(GAME_EXE "${CMAKE_SOURCE_DIR}/extracted/app/game.EXE" CACHE FILEPATH "GOG Moto Racer game.EXE")
+set(RECOMP_PYTHON "${CMAKE_SOURCE_DIR}/.venv/bin/python" CACHE FILEPATH "Python with pefile+capstone")
+set(GEN_DIR "${CMAKE_BINARY_DIR}/gen")
+# PS5: the C is generated on the host first (docs: README.md of MotoRacer-PS5) and compiled from gen-ps5/
+option(PS5 "Cross-compile for the PS5 (ps5/ build scripts)" OFF)
+if(PS5)
+  set(GEN_DIR "${CMAKE_SOURCE_DIR}/gen-ps5")
+  set(MOTORACER_PS5_SDL_INCLUDE "" CACHE PATH "SDL3 headers (the Motorhead PS5 SDL source tree)")
+  set(MOTORACER_PS5_SDL_LIB "" CACHE FILEPATH "libSDL3.a built for the PS5")
+endif()
+set(GEN_FILE_COUNT 64)
+
+set(GEN_SOURCES "${GEN_DIR}/dispatch_table.c" "${GEN_DIR}/imports.c")
+math(EXPR _last "${GEN_FILE_COUNT} - 1")
+foreach(i RANGE ${_last})
+  string(LENGTH "${i}" _len)
+  if(_len EQUAL 1)
+    set(_n "00${i}")
+  elseif(_len EQUAL 2)
+    set(_n "0${i}")
+  else()
+    set(_n "${i}")
+  endif()
+  list(APPEND GEN_SOURCES "${GEN_DIR}/code_${_n}.c")
+endforeach()
+
+# Translator optimisations (docs/notes/23-translator-speed.md): guest registers in C locals, local memory
+# base. OFF builds the plain translation, for benchmarks.
+option(MOTORACER_GUEST_OPT "Optimised translation (registers in locals, local memory base)" ON)
+set(MOTORACER_TRANSLATOR_FLAGS "" CACHE STRING "Extra recomp_main.py flags (benchmarks, e.g. --no-x87-locals)")
+mark_as_advanced(MOTORACER_TRANSLATOR_FLAGS)
+set(RECOMP_TRANSLATOR_FLAGS ${MOTORACER_TRANSLATOR_FLAGS})
+if(NOT MOTORACER_GUEST_OPT)
+  list(APPEND RECOMP_TRANSLATOR_FLAGS --no-regcache)
+endif()
+# Game code as a module (docs/notes/28-easy-install.md): the program (runtime, SDL) contains no translated
+# code and loads gamecode.so / gamecode.dll from its own folder at start.
+option(MOTORACER_GAME_MODULE "Build the game code as a module the program loads at start" OFF)
+if(MOTORACER_GAME_MODULE)
+  list(APPEND RECOMP_TRANSLATOR_FLAGS --module)
+endif()
+# Without game.EXE a module build makes the program only (CI, releases: docs/notes/28-easy-install.md);
+# the player's machine builds the module with recompiler/build_gamecode.py.
+set(MOTORACER_HAVE_GAME ON)
+if(MOTORACER_GAME_MODULE AND NOT EXISTS "${GAME_EXE}")
+  set(MOTORACER_HAVE_GAME OFF)
+  message(STATUS "No game.EXE: building the program only (game code: recompiler/build_gamecode.py)")
+endif()
+if(MOTORACER_HAVE_GAME)
+if(NOT PS5)
+file(GLOB RECOMP_TOOL_SOURCES "${CMAKE_SOURCE_DIR}/recompiler/*.py" "${CMAKE_SOURCE_DIR}/recompiler/recomp/*.py")
+add_custom_command(
+  OUTPUT ${GEN_SOURCES} "${GEN_DIR}/recomp_funcs.h" "${GEN_DIR}/imports.h"
+  COMMAND "${RECOMP_PYTHON}" -I "${CMAKE_SOURCE_DIR}/recompiler/recomp_main.py"
+          "${GAME_EXE}" "${GEN_DIR}" --files ${GEN_FILE_COUNT} ${RECOMP_TRANSLATOR_FLAGS}
+  DEPENDS "${GAME_EXE}" ${RECOMP_TOOL_SOURCES}
+  COMMENT "Recompiling game.EXE to C"
+  VERBATIM)
+endif()  # NOT PS5
+
+# Generated guest code: plain C, warnings off (it is machine output).
+add_library(gamecode OBJECT ${GEN_SOURCES})
+target_include_directories(gamecode PRIVATE runtime/include "${GEN_DIR}")
+set(MOTORACER_GUEST_OPT_LEVEL "-O2" CACHE STRING "Optimisation level for the generated game code")
+target_compile_options(gamecode PRIVATE -w ${MOTORACER_GUEST_OPT_LEVEL} -fno-strict-aliasing)
+if(PS5)
+  # the console target has FMA: one rounding per x87 operation, as the translated code (and the I76 streak bug) needs
+  target_compile_options(gamecode PRIVATE -ffp-contract=off)
+endif()
+# Profile-guided game code (PSP: the translated functions are larger than the 16 KB instruction cache;
+# GCC moves the code a run never took out of the hot paths and orders functions by use).
+# MOTORACER_PGO=gen: instrumented build (training run: scripts/psp/pgo.sh); =use: built with the counts
+# found next to the objects (the same build directory, after the training run's .gcda files are copied in).
+set(MOTORACER_PGO "" CACHE STRING "Profile-guided game code: gen or use (empty: off)")
+# Link-time optimisation of the game code: GCC inlines small translated functions (vector helpers,
+# matrix copies: a call costs the x86 calling convention through guest registers and the guest stack)
+# into their callers across the generated files. The optimisation flags go to the link as well.
+option(MOTORACER_LTO "Link-time optimisation of the game code" OFF)
+# (the translated helpers carry the guest-register prologue / epilogue: beyond -O2's default size limit
+# for inlining functions not declared inline; LTO takes these limits from the compile options)
+set(MOTORACER_LTO_INLINE "--param=max-inline-insns-auto=150" CACHE STRING "LTO inlining limits")
+if(MOTORACER_LTO)
+  target_compile_options(gamecode PRIVATE -flto ${MOTORACER_LTO_INLINE})
+  add_link_options(-flto=auto ${MOTORACER_GUEST_OPT_LEVEL} -fno-strict-aliasing ${MOTORACER_LTO_INLINE})
+  if(PSP)
+    add_link_options(-G0 -fno-math-errno)
+  endif()
+  if(MOTORACER_PGO STREQUAL "use")
+    add_link_options(-fprofile-use -fprofile-partial-training -Wno-missing-profile)
+  endif()
+endif()
+if(MOTORACER_PGO STREQUAL "gen")
+  target_compile_options(gamecode PRIVATE -fprofile-generate -fprofile-update=single)
+  add_compile_definitions(RECOMP_PGO_GEN)
+  add_link_options(-fprofile-generate)
+elseif(MOTORACER_PGO STREQUAL "use")
+  # (no hot / cold function splitting: -freorder-blocks-and-partition breaks on MIPS — assembler CFI
+  # errors, then HI16 / LO16 relocation pairs split across .text.hot and .text.unlikely)
+  target_compile_options(gamecode PRIVATE -fprofile-use -fprofile-partial-training -Wno-missing-profile)
+endif()
+if(MOTORACER_GUEST_OPT)
+  target_compile_definitions(gamecode PRIVATE RECOMP_GENERATED)
+endif()
+if(MOTORACER_GAME_MODULE)
+  # only recomp_module is exported; calls between guest functions stay direct
+  set_target_properties(gamecode PROPERTIES POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden)
+  target_compile_definitions(gamecode PRIVATE RECOMP_MODULE)
+endif()
+endif()  # MOTORACER_HAVE_GAME
+
+# SDL3: the system package by default. MOTORACER_BUNDLED_SDL builds a pinned release and links it
+# statically; SDL then loads X11/Wayland/Vulkan/audio libraries at run time, so the binary needs
+# only glibc (Steam Deck / any Linux, see docs/notes/15-ports-plan.md).
+option(MOTORACER_BUNDLED_SDL "Build SDL3 from source and link it statically" OFF)
+# Profiling for small targets (docs/notes/21-psp-feasibility.md): x87 in single precision, and a counter of
+# executed x86 instructions (MOTORACER_ICOUNT=1 logs them per frame).
+option(MOTORACER_FPU_FLOAT "Emulate the x87 FPU in single precision" OFF)
+# PSP (docs/notes/25-psp-port.md; configure with psp-cmake from pspdev): single-precision x87 (the
+# Allegrex FPU has no doubles), the compact guest address space (no virtual memory), small data
+# section off (-G0: the game has more globals than gp-relative addressing reaches).
+if(PSP)
+  set(MOTORACER_FPU_FLOAT ON CACHE BOOL "" FORCE)
+  add_compile_definitions(RECOMP_COMPACT_GUEST)
+  # -fno-math-errno: sqrtf is the FPU's sqrt.s instead of a libm call (nothing reads errno)
+  add_compile_options(-G0 -fno-math-errno)
+  # add_compile_options reaches only targets created after it: the game code (created above) too.
+  # Without it the generated code addressed small runtime globals (M, prof_fn) gp-relative, which
+  # links only while they happen to lie within 32 KB of _gp.
+  if(TARGET gamecode)
+    target_compile_options(gamecode PRIVATE -G0 -fno-math-errno)
+  endif()
+endif()
+option(MOTORACER_COUNT_INSNS "Count executed x86 instructions (slow)" OFF)
+option(MOTORACER_CHECK_SAVED "Check the translator's register-spill assumptions at run time" OFF)
+if(MOTORACER_CHECK_SAVED)
+  add_compile_definitions(RECOMP_CHECK_SAVED)
+endif()
+# PSP dev: PPSSPP does not trap unaligned lw/sw like the real Allegrex; this makes every "proven
+# aligned" access (RD32A & co., translator and native code) check its address and stop with FATAL.
+option(MOTORACER_PROF_FUNCS "Profiling build: the sampler also counts the running guest function" OFF)
+if(MOTORACER_PROF_FUNCS)
+  add_compile_definitions(RECOMP_PROF_FUNCS)
+endif()
+option(MOTORACER_CHECK_ALIGN "Check aligned guest memory accesses at run time" OFF)
+if(MOTORACER_CHECK_ALIGN)
+  add_compile_definitions(RECOMP_CHECK_ALIGN)
+endif()
+if(MOTORACER_FPU_FLOAT)
+  add_compile_definitions(RECOMP_FPU_FLOAT)
+endif()
+if(MOTORACER_COUNT_INSNS)
+  add_compile_definitions(RECOMP_COUNT_INSNS)
+endif()
+if(MOTORACER_BUNDLED_SDL)
+  include(FetchContent)
+  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+  set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(SDL3
+    URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.16/SDL3-3.4.16.tar.gz
+    URL_HASH SHA256=7322236cd12090c3eb40b9728be4d49c76f66ad17d04369584d4ecad5cf77c68)
+  FetchContent_MakeAvailable(SDL3)
+  set(SDL3_TARGET SDL3::SDL3-static)
+elseif(PS5)
+  add_library(sdl3_ps5 INTERFACE)
+  target_include_directories(sdl3_ps5 INTERFACE "${MOTORACER_PS5_SDL_INCLUDE}")
+  set(SDL3_TARGET sdl3_ps5)
+elseif(PSP)
+  # PSP: SDL's headers only; runtime/src/psp/sdl_psp.cpp implements the subset the runtime uses on
+  # the PSP's own APIs (SDL3's static library brought ~2 MB of unused video / renderer code and data).
+  find_package(SDL3 REQUIRED CONFIG)
+  get_target_property(SDL3_INCLUDES SDL3::SDL3 INTERFACE_INCLUDE_DIRECTORIES)
+  add_library(sdl3_headers INTERFACE)
+  target_include_directories(sdl3_headers INTERFACE ${SDL3_INCLUDES})
+  set(SDL3_TARGET sdl3_headers)
+else()
+  find_package(SDL3 REQUIRED CONFIG)
+  set(SDL3_TARGET SDL3::SDL3)
+endif()
+
+# runtime/src: core/ (loader, memory, exceptions, dispatch), win32/ dx/ gpu/ (Windows / DirectX),
+# host/ (SDL window, audio, video), game/ (Moto Racer: hooks, menu, settings, installer, natives/),
+# platform/ and psp/ (OS adapters, added below)
+file(GLOB RUNTIME_SOURCES CONFIGURE_DEPENDS
+  runtime/src/core/*.cpp runtime/src/core/*.c runtime/src/win32/*.cpp runtime/src/dx/*.cpp runtime/src/gpu/*.cpp
+  runtime/src/host/*.cpp runtime/src/game/*.cpp runtime/src/game/natives/*.cpp)
+
+# Host platform adapters (runtime/src/platform/platform.h): exactly one set per OS / CPU.
+set(PLAT runtime/src/platform)
+if(APPLE)
+  list(APPEND RUNTIME_SOURCES ${PLAT}/posix.cpp ${PLAT}/paths_macos.cpp)
+elseif(WIN32)
+  list(APPEND RUNTIME_SOURCES ${PLAT}/win32.cpp)
+elseif(PSP)
+  # no SDL_GPU on the PSP: the GE backend (runtime/src/psp) replaces the SDL_GPU presenter and
+  # Direct3D backend
+  list(REMOVE_ITEM RUNTIME_SOURCES ${CMAKE_SOURCE_DIR}/runtime/src/host/host_gpu.cpp
+       ${CMAKE_SOURCE_DIR}/runtime/src/dx/d3d_gpu.cpp ${CMAKE_SOURCE_DIR}/runtime/src/gpu/shaders.cpp)
+  list(APPEND RUNTIME_SOURCES ${PLAT}/psp.cpp ${PLAT}/stack_mips.S runtime/src/psp/ge.cpp
+       runtime/src/psp/gpu_psp.cpp runtime/src/psp/d3d_ge.cpp runtime/src/psp/sdl_psp.cpp
+       runtime/src/psp/malloc_trace.cpp runtime/src/psp/mp3_psp.cpp)
+elseif(PS5)
+  # no SDL_GPU: frames go to the RADV presenter; the Direct3D backend is stubbed (software renderer)
+  # MOTORACER_PS5_GPU: the repo's own SDL_GPU / Direct3D backend on the console's GPU (SDL's Vulkan driver over
+  # RADV, ps5/sdl). OFF: software renderer only (the CPU frame goes to the RADV presenter).
+  option(MOTORACER_PS5_GPU "PS5: SDL_GPU (Vulkan) Direct3D backend" ON)
+  list(APPEND RUNTIME_SOURCES ${PLAT}/ps5.cpp)
+  if(MOTORACER_PS5_GPU)
+    set(MOTORACER_PS5_GPU_BUILD ON)
+  else()
+    list(REMOVE_ITEM RUNTIME_SOURCES ${CMAKE_SOURCE_DIR}/runtime/src/host/host_gpu.cpp
+         ${CMAKE_SOURCE_DIR}/runtime/src/dx/d3d_gpu.cpp ${CMAKE_SOURCE_DIR}/runtime/src/gpu/shaders.cpp)
+    list(APPEND RUNTIME_SOURCES runtime/src/ps5/host_gpu_ps5.cpp runtime/src/ps5/d3d_gpu_ps5.cpp)
+  endif()
+elseif(UNIX)
+  list(APPEND RUNTIME_SOURCES ${PLAT}/posix.cpp ${PLAT}/paths_xdg.cpp ${PLAT}/launchers_xdg.cpp)
+else()
+  message(FATAL_ERROR "no platform adapters for ${CMAKE_SYSTEM_NAME} yet (see docs/notes/15-ports-plan.md)")
+endif()
+if(WIN32 OR PSP)
+  # Windows: the deep stack is a fiber (win32.cpp); PSP: stack_mips.S (above)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
+  list(APPEND RUNTIME_SOURCES ${PLAT}/stack_arm64.S)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+  list(APPEND RUNTIME_SOURCES ${PLAT}/stack_x86_64_sysv.S)
+else()
+  message(FATAL_ERROR "no call_on_stack trampoline for ${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
+if(MOTORACER_GAME_MODULE)
+  add_executable(motoracer ${RUNTIME_SOURCES})
+  target_compile_definitions(motoracer PRIVATE RECOMP_GAME_MODULE)
+  # the module links against the program's runtime symbols (R, M, the hooks, the import shims);
+  # Windows: exported from the .exe, with an import library (libmotoracer.dll.a) for linking the DLL
+  set_target_properties(motoracer PROPERTIES ENABLE_EXPORTS ON)
+  if(WIN32)
+    target_link_options(motoracer PRIVATE -Wl,--export-all-symbols)
+  endif()
+  # The guest functions the runtime calls by name (the natives' translated callees f_<va> and their
+  # check-mode fallbacks f_<va>_t) live in the module: core/guest_code.cpp defines forwarders for every
+  # one the runtime sources mention, listed here (re-scanned whenever a runtime source changes).
+  file(GLOB_RECURSE _rt_scan CONFIGURE_DEPENDS runtime/src/*.cpp runtime/src/*.h runtime/src/*.c)
+  set(_guest_fns "")
+  foreach(_src IN LISTS _rt_scan)
+    file(STRINGS "${_src}" _hits REGEX "f_[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]")
+    foreach(_line IN LISTS _hits)
+      string(REGEX MATCHALL "f_[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f](_t)?" _m "${_line}")
+      list(APPEND _guest_fns ${_m})
+    endforeach()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_src}")
+  endforeach()
+  list(REMOVE_DUPLICATES _guest_fns)
+  list(SORT _guest_fns)
+  set(_fwd "// Generated by CMakeLists.txt from the runtime sources: guest functions the runtime calls by name.\n")
+  foreach(_f IN LISTS _guest_fns)
+    if(_f MATCHES "^f_([0-9a-f]+)_t$")
+      string(APPEND _fwd "GUEST_FALLBACK(${CMAKE_MATCH_1})\n")
+    elseif(_f MATCHES "^f_([0-9a-f]+)$")
+      string(APPEND _fwd "GUEST_FN(${CMAKE_MATCH_1})\n")
+    endif()
+  endforeach()
+  file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/guest_forwarders.inc" CONTENT "${_fwd}" @ONLY)
+  target_include_directories(motoracer PRIVATE "${CMAKE_BINARY_DIR}")
+  if(MOTORACER_HAVE_GAME)
+    add_library(gamemodule MODULE $<TARGET_OBJECTS:gamecode>)
+    set_target_properties(gamemodule PROPERTIES PREFIX "" OUTPUT_NAME gamecode
+                          RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    target_link_libraries(gamemodule PRIVATE motoracer)
+  endif()
+else()
+  add_executable(motoracer ${RUNTIME_SOURCES} $<TARGET_OBJECTS:gamecode>)
+endif()
+target_include_directories(motoracer PRIVATE runtime/include runtime/src runtime/src/win32 runtime/src/dx "${GEN_DIR}")
+target_compile_options(motoracer PRIVATE
+  $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wno-unused-parameter>)
+# Native replacements of guest functions must round like the translated code (one rounding per x87
+# operation): no fused multiply-add contraction of their expressions.
+set(_natives runtime/src/game/natives)
+set_source_files_properties(${_natives}/native_geom.cpp ${_natives}/native_render.cpp ${_natives}/native_load.cpp
+  ${_natives}/native_race_a.cpp ${_natives}/native_race_b.cpp ${_natives}/native_race_c.cpp ${_natives}/native_race_d.cpp
+  ${_natives}/native_race_e.cpp
+  PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+target_link_libraries(motoracer PRIVATE ${SDL3_TARGET})
+if(PS5)
+  target_compile_options(motoracer PRIVATE -ffp-contract=off)
+  target_compile_definitions(motoracer PRIVATE MOTORACER_PS5)
+  if(MOTORACER_PS5_GPU)
+    target_compile_definitions(motoracer PRIVATE MOTORACER_PS5_GPU)
+  endif()
+  target_include_directories(motoracer PRIVATE "${CMAKE_SOURCE_DIR}/runtime/src/ps5")
+endif()
+if(PSP)
+  target_link_libraries(motoracer PRIVATE pspgu pspge pspdisplay psppower pspaudio pspctrl pspvfpu pspmp3 psputility)
+  # dev: live host heap blocks by call site in the MOTORACER_MEM_STATS log (runtime/src/psp/malloc_trace.cpp)
+  option(MOTORACER_MALLOC_TRACE "PSP: trace host malloc call sites (dev)" OFF)
+  if(MOTORACER_MALLOC_TRACE)
+    target_compile_definitions(motoracer PRIVATE RECOMP_MALLOC_TRACE)
+    target_link_options(motoracer PRIVATE -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memalign,--wrap=free)
+  endif()
+endif()
+
+get_filename_component(GAME_DIR_FOR_ICON "${GAME_EXE}" DIRECTORY)
+if(WIN32)
+  # GUI program (no console window), one self-contained .exe (static C++ runtime), manifest
+  # (UTF-8 code page, DPI awareness) and the game's own icon from the user's GOG files.
+  enable_language(RC)
+  set(_rc "1 24 \"${CMAKE_SOURCE_DIR}/packaging/windows/motoracer.manifest\"\n")
+  if(EXISTS "${GAME_DIR_FOR_ICON}/goggame-1207658895.ico")
+    string(APPEND _rc "1 ICON \"${GAME_DIR_FOR_ICON}/goggame-1207658895.ico\"\n")
+  endif()
+  file(WRITE "${CMAKE_BINARY_DIR}/motoracer.rc" "${_rc}")
+  target_sources(motoracer PRIVATE "${CMAKE_BINARY_DIR}/motoracer.rc")
+  target_link_options(motoracer PRIVATE -mwindows -static)
+endif()
+
+# PSP: EBOOT.PBP next to the build (copy it to ms0:/PSP/GAME/MOTORACER/ with the game files in game/).
+# MEMSIZE 1: the extended memory of PSP-2000/3000 (64 MB). MOTORACER_PSP_1000: without it, so the
+# program gets the PSP-1000's ~24 MB user partition on every model (PPSSPP enforces it too).
+option(MOTORACER_PSP_1000 "PSP: fit the PSP-1000 (no extended memory)" OFF)
+if(PSP AND MOTORACER_PSP_1000)
+  # races peak at 12.8 MB (Dirt Arena, 23 bikes); the unused x86 .text adds ~0.75 MB (donate_text_to_heap)
+  # quitting a race to the menus peaks at 12.8 MB. 12.75 MB + ~0.9 MB of .text: the C heap needs the
+  # rest (13 MB left it ~50 KB free on West Way: out of host memory at the first race frame)
+  set(MOTORACER_PSP_HEAP_KB 13056 CACHE STRING "PSP-1000: guest heap size in KB")
+  add_compile_definitions(RECOMP_GUEST_HEAP_KB=${MOTORACER_PSP_HEAP_KB})
+endif()
+if(PSP)
+  if(MOTORACER_PSP_1000)
+    create_pbp_file(TARGET motoracer TITLE "Moto Racer Recompiled")
+  else()
+    create_pbp_file(TARGET motoracer TITLE "Moto Racer Recompiled" MEMSIZE 1)
+  endif()
+endif()
+
+# `cmake --build build/cmake --target app` -> build/cmake/MotoRacer.app
+if(APPLE)
+  add_custom_target(app
+  COMMAND "${CMAKE_SOURCE_DIR}/packaging/macos/make_app.sh" "$<TARGET_FILE:motoracer>" "${CMAKE_BINARY_DIR}" "${GAME_DIR_FOR_ICON}"
+  DEPENDS motoracer
+  COMMENT "Assembling MotoRacer.app"
+  VERBATIM)
+endif()

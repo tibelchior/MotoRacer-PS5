@@ -1,0 +1,11 @@
+name: Feature request
+description: An idea or improvement for the port
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: The idea, and which platform it is about if it matters.
+    validations:
+      required: true
