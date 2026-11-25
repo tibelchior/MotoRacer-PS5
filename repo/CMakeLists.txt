@@ -17,7 +17,7 @@ set(GEN_DIR "${CMAKE_BINARY_DIR}/gen")
 option(PS5 "Cross-compile for the PS5 (ps5/ build scripts)" OFF)
 if(PS5)
   set(GEN_DIR "${CMAKE_SOURCE_DIR}/gen-ps5")
-  set(MOTORACER_PS5_SDL_INCLUDE "" CACHE PATH "SDL3 headers (the Motorhead PS5 SDL source tree)")
+  set(MOTORACER_PS5_SDL_INCLUDE "" CACHE PATH "SDL3 headers (the patched SDL source tree)")
   set(MOTORACER_PS5_SDL_LIB "" CACHE FILEPATH "libSDL3.a built for the PS5")
 endif()
 set(GEN_FILE_COUNT 64)
@@ -76,7 +76,7 @@ target_include_directories(gamecode PRIVATE runtime/include "${GEN_DIR}")
 set(MOTORACER_GUEST_OPT_LEVEL "-O2" CACHE STRING "Optimisation level for the generated game code")
 target_compile_options(gamecode PRIVATE -w ${MOTORACER_GUEST_OPT_LEVEL} -fno-strict-aliasing)
 if(PS5)
-  # the console target has FMA: one rounding per x87 operation, as the translated code (and the I76 streak bug) needs
+  # the console target has FMA: one rounding per x87 operation, as the translated code needs
   target_compile_options(gamecode PRIVATE -ffp-contract=off)
 endif()
 # Profile-guided game code (PSP: the translated functions are larger than the 16 KB instruction cache;

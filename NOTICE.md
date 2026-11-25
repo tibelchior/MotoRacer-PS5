@@ -17,7 +17,7 @@ This repository is a **PS5 port kit** for [MotoRacerRecomp](https://github.com/s
   fetched at the pinned commits in `tools/pins.env` (GPL-3.0 and Mesa's licences). A finished
   title links their code, so share built titles only together with the source obligations
   those licences require.
-- **SDL3** (zlib licence): the patched source comes from the Motorhead PS5 port
-  (`../Motorhead-PS5`), which builds on S95Sedan's reconstruction (see its `NOTICE.md`).
+- **SDL3** (zlib licence): the official release (`tools/pins.env`) is fetched at build time and patched with
+  `ps5/sdl/hooks.patch` and `ps5/sdl/patch.py`.
 - **Moto Racer** is the property of its rights holders. This project is not affiliated with or
   endorsed by Delphine Software, Infogrames, GOG or Sony. You need your own legal copy of the game.

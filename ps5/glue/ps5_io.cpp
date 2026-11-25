@@ -4,7 +4,7 @@
 //  - Sound: SDL's dummy audio driver (patch 0004) hands every mixed block to mh_ps5_audio_play,
 //    which writes it to the console's main audio output (48 kHz, 16-bit stereo).
 // No SDK header declares these calls; the declarations and the pad sample layout are the ones
-// ps5_console.cpp (DiRT2-PS5) and mihawk-99/PS5_VulkanTemplate run with.
+// mihawk-99/PS5_VulkanTemplate runs with.
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>

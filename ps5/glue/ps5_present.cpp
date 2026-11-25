@@ -1,9 +1,9 @@
 // PS5 frame presenter: takes the finished XRGB8888 frame SDL's dummy video driver hands over
-// (patches/motorhead/0002-sdl-dummy-present.patch) and puts it on the console's display.
+// (ps5/sdl/hooks.patch) and puts it on the console's display.
 //
 // The driver is RADV, linked into the title (no loader): every function is taken from
-// vk_icdGetInstanceProcAddr. The swapchain is VK_KHR_display on the console's one display, as
-// DiRT 2's ps5_vulkan.cpp does it. Per frame: copy the pixels into a staging buffer, copy that
+// vk_icdGetInstanceProcAddr. The swapchain is VK_KHR_display on the console's one display.
+// Per frame: copy the pixels into a staging buffer, copy that
 // to an image of the frame's size, then blit it (aspect kept, black bars) onto the swapchain
 // image and present.
 #define VK_NO_PROTOTYPES
@@ -23,7 +23,7 @@ extern "C" const char *mh_ps5_data_dir(void);  // ps5_launch.cpp
 
 extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char *name);
 
-// What a loader-less Vulkan consumer calls (RADV's entry point, as DiRT 2's glue).
+// What a loader-less Vulkan consumer calls (RADV's entry point).
 extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char *name) {
     return vk_icdGetInstanceProcAddr(instance, name);
 }

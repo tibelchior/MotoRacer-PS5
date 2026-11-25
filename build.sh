@@ -1,17 +1,18 @@
 #!/bin/bash
 # Builds Moto Racer for the PS5 from the recompiled game (repo/gen-ps5) and your own GOG files.
+#   ./build.sh toolchain once: PS5 payload SDK, RADV and signing tool into the Docker volume (1-2 h)
 #   ./build.sh gen       translate game.EXE to C on the host (needs repo/.venv); writes repo/gen-ps5
-#   ./build.sh sdl       SDL3 for Prospero (patched source from the Motorhead port's tree in the volume)
+#   ./build.sh sdl       SDL3 for Prospero (official release + ps5/sdl patches)
 #   ./build.sh compile   cross-compile runtime + game code
 #   ./build.sh title     sdl + compile + link + sign into dist/<TITLE_ID>
 #   ./build.sh package   copy the GOG game folder into dist/<TITLE_ID>/MotoRacer and add port settings
-# Options: BUILD_VOLUME=<name> (default dirt2ps5-build-data), GAME_DIR=<GOG game folder (game.EXE inside)>
+# Options: BUILD_VOLUME=<name> (default motoracerps5-build-data), GAME_DIR=<GOG game folder (game.EXE inside)>
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 source "$HERE/tools/pins.env"
 STEP=${1:-title}
 GAME=${GAME_DIR:-$HERE/game-extract/app}
-IMAGE=dirt2ps5-build VOLUME=${BUILD_VOLUME:-dirt2ps5-build-data} NAME=motoracerps5
+IMAGE=${BUILD_IMAGE:-motoracerps5-build} VOLUME=${BUILD_VOLUME:-motoracerps5-build-data} NAME=motoracerps5
 die() { echo "error: $*" >&2; exit 1; }
 if [ "$STEP" = gen ]; then
     [ -f "$GAME/game.EXE" ] || die "no $GAME/game.EXE"
@@ -29,6 +30,7 @@ if [ "$STEP" != package ]; then
 fi
 run() { docker exec -e VOL=/build "$NAME" bash "/work/tools/container/$1.sh"; }
 case $STEP in
+    toolchain) run toolchain ;;
     sdl) run sdl ;;
     compile) run sdl; run compile ;;
     title) run sdl; run compile || true; run title ;;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patches a copy of the Motorhead port's SDL3 source for Vulkan on the PS5 (run by tools/container/sdl.sh)."""
+"""Patches a copy of the SDL3 source for Vulkan on the PS5 (run by tools/container/sdl.sh)."""
 import re, sys
 src, inc = sys.argv[1], sys.argv[2]
 # 1. dummy video: Vulkan entry points

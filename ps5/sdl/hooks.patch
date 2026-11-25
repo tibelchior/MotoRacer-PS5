@@ -1,0 +1,117 @@
+diff --git a/src/filesystem/unix/SDL_sysfilesystem.c b/src/filesystem/unix/SDL_sysfilesystem.c
+--- a/src/filesystem/unix/SDL_sysfilesystem.c
++++ b/src/filesystem/unix/SDL_sysfilesystem.c
+@@ -238,8 +238,14 @@ static char *GetExePath(void)
+     return result;
+ }
+ 
++// PS5: the title says where it lives (ps5/glue/ps5_launch.cpp); weak elsewhere.
++extern const char *mh_ps5_base_path(void) __attribute__((weak));
++
+ char *SDL_SYS_GetBasePath(void)
+ {
++    if (mh_ps5_base_path) {
++        return SDL_strdup(mh_ps5_base_path());
++    }
+     char *path = GetExePath();
+     if (!path) {
+         return NULL;
+diff --git a/src/video/dummy/SDL_nullframebuffer.c b/src/video/dummy/SDL_nullframebuffer.c
+--- a/src/video/dummy/SDL_nullframebuffer.c
++++ b/src/video/dummy/SDL_nullframebuffer.c
+@@ -28,6 +28,9 @@
+ 
+ #define DUMMY_SURFACE "SDL.internal.window.surface"
+ 
++// PS5: the title provides this (ps5/glue/ps5_present.cpp); weak so other platforms link without it.
++extern void mh_ps5_present(const void *pixels, int width, int height, int pitch) __attribute__((weak));
++
+ 
+ bool SDL_DUMMY_CreateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Window *window, SDL_PixelFormat *format, void **pixels, int *pitch)
+ {
+@@ -61,6 +64,9 @@ bool SDL_DUMMY_UpdateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Window *windo
+     }
+ 
+     // Send the data to the display
++    if (mh_ps5_present) {
++        mh_ps5_present(surface->pixels, surface->w, surface->h, surface->pitch);
++    }
+     if (SDL_GetHintBoolean(SDL_HINT_VIDEO_DUMMY_SAVE_FRAMES, false)) {
+         char file[128];
+         (void)SDL_snprintf(file, sizeof(file), "SDL_window%" SDL_PRIu32 "-%8.8d.bmp",
+diff --git a/src/video/dummy/SDL_nullvideo.c b/src/video/dummy/SDL_nullvideo.c
+--- a/src/video/dummy/SDL_nullvideo.c
++++ b/src/video/dummy/SDL_nullvideo.c
+@@ -183,8 +183,9 @@ bool DUMMY_VideoInitCommon(SDL_VideoDevice *_this)
+     // Use a fake 32-bpp desktop mode
+     SDL_zero(mode);
+     mode.format = SDL_PIXELFORMAT_XRGB8888;
+-    mode.w = 1024;
+-    mode.h = 768;
++    mode.w = 1920;
++    mode.h = 1080;
++    mode.refresh_rate = 60.0f;
+     if (SDL_AddBasicVideoDisplay(&mode) == 0) {
+         return false;
+     }
+diff --git a/src/audio/dummy/SDL_dummyaudio.c b/src/audio/dummy/SDL_dummyaudio.c
+--- a/src/audio/dummy/SDL_dummyaudio.c
++++ b/src/audio/dummy/SDL_dummyaudio.c
+@@ -29,8 +29,22 @@
+ #include <emscripten/emscripten.h>
+ #endif
+ 
++// PS5 port: the launcher provides the console's audio output (ps5_io.cpp).
++extern void mh_ps5_audio_play(const void *frames, int count) __attribute__((weak));
++
++static bool DUMMYAUDIO_PlayDevice(SDL_AudioDevice *device, const Uint8 *buffer, int buflen)
++{
++    if (mh_ps5_audio_play) {
++        mh_ps5_audio_play(buffer, buflen / 4);  // 16-bit stereo frames
++    }
++    return true;
++}
++
+ static bool DUMMYAUDIO_WaitDevice(SDL_AudioDevice *device)
+ {
++    if (mh_ps5_audio_play && !device->recording) {
++        return true;  // PlayDevice blocks at the console's pace
++    }
+     SDL_Delay(device->hidden->io_delay);
+     return true;
+ }
+@@ -42,6 +56,14 @@ static bool DUMMYAUDIO_OpenDevice(SDL_AudioDevice *device)
+         return false;
+     }
+ 
++    if (mh_ps5_audio_play && !device->recording) {
++        device->spec.format = SDL_AUDIO_S16;
++        device->spec.channels = 2;
++        device->spec.freq = 48000;
++        device->sample_frames = 1024;
++        SDL_UpdatedAudioDeviceFormat(device);
++    }
++
+     if (!device->recording) {
+         device->hidden->mixbuf = (Uint8 *) SDL_malloc(device->buffer_size);
+         if (!device->hidden->mixbuf) {
+@@ -105,6 +127,7 @@ static bool DUMMYAUDIO_Init(SDL_AudioDriverImpl *impl)
+     impl->OpenDevice = DUMMYAUDIO_OpenDevice;
+     impl->CloseDevice = DUMMYAUDIO_CloseDevice;
+     impl->WaitDevice = DUMMYAUDIO_WaitDevice;
++    impl->PlayDevice = DUMMYAUDIO_PlayDevice;
+     impl->GetDeviceBuf = DUMMYAUDIO_GetDeviceBuf;
+     impl->WaitRecordingDevice = DUMMYAUDIO_WaitDevice;
+     impl->RecordDevice = DUMMYAUDIO_RecordDevice;
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -382,7 +382,7 @@ dep_option(SDL_HIDAPI              "Enable the HIDAPI subsystem" ON "NOT VISIONO
+ dep_option(SDL_HIDAPI_LIBUSB       "Use libusb for low level joystick drivers" ON "SDL_HIDAPI;SDL_HIDAPI_LIBUSB_AVAILABLE" OFF)
+ dep_option(SDL_HIDAPI_LIBUSB_SHARED "Dynamically load libusb support" ON "SDL_HIDAPI_LIBUSB;SDL_DEPS_SHARED" OFF)
+ dep_option(SDL_HIDAPI_JOYSTICK     "Use HIDAPI for low level joystick drivers" ON SDL_HIDAPI OFF)
+-dep_option(SDL_VIRTUAL_JOYSTICK    "Enable the virtual-joystick driver" ON SDL_HIDAPI OFF)
++dep_option(SDL_VIRTUAL_JOYSTICK    "Enable the virtual-joystick driver" ON "NOT VISIONOS" OFF)
+ set_option(SDL_LIBUDEV             "Enable libudev support" ON)
+ set_option(SDL_ASAN                "Use AddressSanitizer to detect memory errors" OFF)
+ set_option(SDL_CCACHE              "Use Ccache to speed up build" OFF)

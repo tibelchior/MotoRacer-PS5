@@ -26,18 +26,18 @@ Status: tested on a console (menus, races, sound, pad, exit). 4K held 60 fps in 
   Python 3 for the host step.
 - The GOG installer `setup_moto_racer_2.1.0.11.exe`, unpacked with [innoextract](https://constexpr.org/innoextract/)
   (`innoextract --gog setup_moto_racer_2.1.0.11.exe`). The folder with `game.EXE` is the game folder.
-- The Motorhead PS5 port ([`../Motorhead-PS5`](../Motorhead-PS5)) next to this one: its patched SDL3 source
-  is reused. Run `../Motorhead-PS5/build.sh toolchain` and `../Motorhead-PS5/build.sh compile` once.
-  The shared Docker volume `dirt2ps5-build-data` holds the toolchain for all these ports.
 
 ## Build
 
 ```bash
+# 0. once: build the PS5 toolchain into a Docker volume (1 to 2 hours)
+./build.sh toolchain
+
 # 1. host step, once: recompile your game.EXE into C (needs repo/.venv with pefile and capstone)
 python3 -m venv repo/.venv && repo/.venv/bin/pip install pefile capstone
 GAME_DIR=/path/to/game/folder ./build.sh gen
 
-# 2. cross-compile, link and sign the title (first run builds SDL3 for the console)
+# 2. cross-compile, link and sign the title (first run downloads SDL3 and builds it for the console)
 ./build.sh title
 
 # 3. copy the game files next to the title
@@ -48,7 +48,7 @@ The result is `dist/PPSA99785/`. Run `./build.sh package` again after every `./b
 (the title step wipes the packaged game folder). Add `art/icon.png` and `art/wallpaper.png`
 (your own images) before step 2 for the home-screen art.
 
-Options: `BUILD_VOLUME=<name>` (default `dirt2ps5-build-data`), `GAME_DIR=<folder with game.EXE>`.
+Options: `BUILD_VOLUME=<name>` (default `motoracerps5-build-data`), `GAME_DIR=<folder with game.EXE>`.
 The step `./build.sh sdl` builds only SDL3; the link step ends with an expected stock-exe link error
 that the script ignores.
 

@@ -3,7 +3,6 @@ set -euo pipefail
 source /work/tools/pins.env
 VOL=${VOL:-/build}                       # the Docker volume: toolchain, sources, build trees
 VK=$VOL/PS5_Vulkan
-TREE=${TREE:-$VOL/tree-motorhead}   # Motorhead tree: only its patched SDL3 source is reused
 OUT=${OUT:-$VOL/game-motoracer}        # build trees and the finished title
 export LLVM_CONFIG=/usr/bin/llvm-config
 export PS5_OUT=$OUT PS5_SDK_DIR=$VK/.deps/native/ps5-payload-sdk

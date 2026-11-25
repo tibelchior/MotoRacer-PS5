@@ -1,5 +1,5 @@
 // PS5 adapters. The guest's 4 GB window is a reserved virtual range; committed 64 KB chunks get direct
-// memory mapped in (as in I76-PS5 / DiRT3, ps5platform/shm.h). In a process without direct memory
+// memory mapped in (ps5platform/shm.h). In a process without direct memory
 // (a payload) it is one anonymous mapping. Files are plain POSIX; everything lives in the data folder.
 #include <dirent.h>
 #include <fcntl.h>
